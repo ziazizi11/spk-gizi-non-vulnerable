@@ -1,13 +1,22 @@
 import os
 import sqlite3
-import pickle
+import json
 import base64
-from flask import Flask, render_template, request, render_template_string, redirect, jsonify
+import secrets
+from werkzeug.utils import secure_filename
+from flask import Flask, render_template, request, redirect, jsonify
 
 app = Flask(__name__)
 
-# VULNERABILITY 1: Hardcoded Secret Key (CWE-798)
-app.secret_key = "super_secret_hardcoded_key_12345"
+# SECURE: Secret key diambil dari environment variable atau di-generate secara acak kriptografis (CWE-798 Fixed)
+app.secret_key = os.environ.get("FLASK_SECRET_KEY") or secrets.token_hex(32)
+
+@app.after_request
+def set_security_headers(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    return response
 
 def get_db_connection():
     conn = sqlite3.connect('gizi.db')
@@ -26,7 +35,6 @@ def init_db():
             fat REAL NOT NULL DEFAULT 0
         )
     ''')
-    # Isi data dummy jika kosong
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM food_recommendations")
     if cursor.fetchone()[0] == 0:
@@ -68,12 +76,10 @@ def calculate_saw_ranking(foods, weights=None):
 
     ranked_results = []
     for food in foods:
-        # Normalisasi kriteria
         r_cal = (min_cal / food['calories']) if food['calories'] > 0 else 0
         r_protein = (food['protein'] / max_protein) if max_protein > 0 else 0
         r_fat = (min_fat / food['fat']) if food['fat'] > 0 else 0
 
-        # Nilai preferensi SAW (Vi)
         v = (weights.get('calories', 0.3) * r_cal) + \
             (weights.get('protein', 0.5) * r_protein) + \
             (weights.get('fat', 0.2) * r_fat)
@@ -93,7 +99,6 @@ def calculate_saw_ranking(foods, weights=None):
             'saw_score': round(v, 4)
         })
 
-    # Urutkan berdasarkan skor SAW tertinggi
     ranked_results.sort(key=lambda x: x['saw_score'], reverse=True)
     for rank, item in enumerate(ranked_results, start=1):
         item['rank'] = rank
@@ -106,11 +111,28 @@ def index():
 
 @app.route('/calculate', methods=['POST'])
 def calculate():
-    weight = float(request.form.get('weight', 0))
-    height = float(request.form.get('height', 0))
-    age = int(request.form.get('age', 0))
+    try:
+        weight = float(request.form.get('weight', 0))
+    except (ValueError, TypeError):
+        weight = 0.0
+
+    try:
+        height = float(request.form.get('height', 0))
+    except (ValueError, TypeError):
+        height = 0.0
+
+    try:
+        age = int(request.form.get('age', 0))
+    except (ValueError, TypeError):
+        age = 0
+
     gender = request.form.get('gender', 'male')
-    goal = request.form.get('goal', 'Defisit') # Defisit, Maintenance, Surplus
+    goal = request.form.get('goal', 'Defisit')
+
+    # Validasi whitelist untuk kategori goal
+    allowed_goals = {'Defisit', 'Maintenance', 'Surplus'}
+    if goal not in allowed_goals:
+        goal = 'Defisit'
 
     # Perhitungan BMR (Rumus Mifflin-St Jeor)
     if gender == 'male':
@@ -120,73 +142,46 @@ def calculate():
 
     tdee = bmr * 1.375 # Faktor aktivitas sedang
 
-    # VULNERABILITY 2: SQL Injection (CWE-89)
-    # Menggabungkan input 'goal' langsung ke dalam kueri SQL mentah
+    # SECURE: Menggunakan parameter binding / prepared statement (CWE-89 Fixed)
     conn = get_db_connection()
-    query = f"SELECT * FROM food_recommendations WHERE category = '{goal}'"
-    foods = conn.execute(query).fetchall()
+    foods = conn.execute("SELECT * FROM food_recommendations WHERE category = ?", (goal,)).fetchall()
     conn.close()
 
     return render_template('result.html', bmr=bmr, tdee=tdee, goal=goal, foods=foods)
 
 @app.route('/search', methods=['GET'])
 def search_food():
-    keyword = request.args.get('q', '')
-    
-    # VULNERABILITY 3: Reflected Cross-Site Scripting / XSS (CWE-79)
-    # Mengembalikan input pengguna langsung ke HTML tanpa sanitasi/escaping
-    html_response = f"""<!DOCTYPE html>
-<html lang="id">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pencarian Menu - SPK Gizi</title>
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700&display=swap" rel="stylesheet">
-    <style>
-        body {{ font-family: 'Plus Jakarta Sans', sans-serif; background: #f8fafc; color: #0f172a; padding: 40px 16px; margin: 0; }}
-        .box {{ max-width: 700px; margin: 40px auto; background: #fff; padding: 36px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.05); border: 1px solid #e2e8f0; }}
-        h2 {{ color: #059669; margin-top: 0; }}
-        .query-box {{ background: #f1f5f9; padding: 14px 18px; border-radius: 10px; margin: 16px 0; border-left: 4px solid #059669; font-size: 1rem; }}
-        .btn {{ display: inline-block; padding: 10px 20px; background: #059669; color: #fff; text-decoration: none; border-radius: 8px; font-weight: 600; }}
-    </style>
-</head>
-<body>
-    <div class="box">
-        <h2>Hasil Pencarian Basis Data Gizi</h2>
-        <div class="query-box">Kata kunci pencarian: <strong>{keyword}</strong></div>
-        <p style="color: #64748b;">Informasi kandungan nutrisi sesuai kriteria pencarian Anda telah diproses ke sistem SPK.</p>
-        <div style="margin-top: 24px; display: flex; gap: 10px;">
-            <a href="/" class="btn">Kembali ke Beranda</a>
-            <a href="/spk/saw" class="btn" style="background: #0284c7;">Lihat Ranking SAW</a>
-        </div>
-    </div>
-</body>
-</html>"""
-    return render_template_string(html_response)
+    keyword = request.args.get('q', '').strip()
+    # SECURE: Menggunakan template Jinja2 terpisah dengan autoescape untuk mencegah XSS & SSTI (CWE-79 Fixed)
+    return render_template('search.html', keyword=keyword)
 
 @app.route('/export', methods=['POST'])
 def export_report():
     user_notes = request.form.get('notes', '')
     
-    # VULNERABILITY 4: Command Injection (CWE-78)
-    # Mengeksekusi perintah sistem operasi langsung menggunakan data dari form pengguna
-    os.system(f"echo '{user_notes}' > report_log.txt")
+    # SECURE: Menulis data menggunakan file I/O Python standar tanpa shell command (CWE-78 Fixed)
+    with open('report_log.txt', 'w', encoding='utf-8') as f:
+        f.write(user_notes + '\n')
     
     return render_template('export_success.html', notes=user_notes)
+
+ALLOWED_GUIDES = {'general.txt'}
 
 @app.route('/guide', methods=['GET'])
 def view_guide():
     filename = request.args.get('file', 'general.txt')
-    
-    # VULNERABILITY 5: Path Traversal (CWE-22)
-    # Membaca file arbitrer tanpa validasi direktori
-    filepath = os.path.join('guides', filename)
-    with open(filepath, 'r') as f:
+    safe_filename = secure_filename(filename)
+    if safe_filename not in ALLOWED_GUIDES:
+        safe_filename = 'general.txt'
+
+    # SECURE: Path Traversal dicegah dengan secure_filename dan whitelist file yang diizinkan (CWE-22 Fixed)
+    filepath = os.path.join('guides', safe_filename)
+    with open(filepath, 'r', encoding='utf-8') as f:
         content = f.read()
     
     if request.args.get('format') == 'raw':
         return content
-    return render_template('guide.html', filename=filename, content=content)
+    return render_template('guide.html', filename=safe_filename, content=content)
 
 @app.route('/spk/saw', methods=['GET', 'POST'])
 def spk_saw_rank():
@@ -197,9 +192,21 @@ def spk_saw_rank():
         data = request.args
 
     category = data.get('category')
-    w_cal = float(data.get('w_calories', 0.3))
-    w_protein = float(data.get('w_protein', 0.5))
-    w_fat = float(data.get('w_fat', 0.2))
+    try:
+        w_cal = float(data.get('w_calories', 0.3))
+    except (ValueError, TypeError):
+        w_cal = 0.3
+
+    try:
+        w_protein = float(data.get('w_protein', 0.5))
+    except (ValueError, TypeError):
+        w_protein = 0.5
+
+    try:
+        w_fat = float(data.get('w_fat', 0.2))
+    except (ValueError, TypeError):
+        w_fat = 0.2
+
     weights = {'calories': w_cal, 'protein': w_protein, 'fat': w_fat}
 
     conn = get_db_connection()
@@ -229,28 +236,45 @@ def load_spk_profile():
     if not profile_data and request.is_json:
         profile_data = request.json.get('profile_data', '')
 
-    # VULNERABILITY 6: Insecure Deserialization (CWE-502)
-    # Menggunakan pickle.loads langsung pada data input pengguna tanpa validasi
-    decoded_data = base64.b64decode(profile_data)
-    user_profile = pickle.loads(decoded_data)
+    user_profile = None
+    if profile_data:
+        # SECURE: Menggunakan JSON parser terstruktur untuk mencegah Insecure Deserialization (CWE-502 Fixed)
+        try:
+            decoded_bytes = base64.b64decode(profile_data)
+            user_profile = json.loads(decoded_bytes.decode('utf-8'))
+        except Exception:
+            try:
+                user_profile = json.loads(profile_data)
+            except Exception:
+                user_profile = None
+
+    if not isinstance(user_profile, dict):
+        user_profile = {'calories': 0.35, 'protein': 0.45, 'fat': 0.20}
 
     if request.is_json or request.args.get('format') == 'json':
         return jsonify({
             "status": "success",
             "message": "Profil SPK berhasil dimuat",
-            "profile": user_profile if isinstance(user_profile, dict) else str(user_profile)
+            "profile": user_profile
         })
 
     return render_template('profile_loaded.html', profile=user_profile)
 
+ALLOWED_REDIRECT_MAP = {
+    'https://promkes.kemkes.go.id': 'https://promkes.kemkes.go.id',
+    'https://kemkes.go.id': 'https://kemkes.go.id',
+    'https://who.int': 'https://who.int'
+}
+DEFAULT_REDIRECT = 'https://promkes.kemkes.go.id'
+
 @app.route('/spk/redirect-reference', methods=['GET'])
 def redirect_reference():
     # Endpoint Fitur SPK 3: Navigasi dan rujukan ke portal gizi / referensi diet eksternal
-    target_url = request.args.get('url', 'https://promkes.kemkes.go.id')
-
-    # VULNERABILITY 7: URL Redirection to Untrusted Site / Open Redirect (CWE-601)
-    # Melakukan redirect langsung menggunakan input URL dari parameter user tanpa validasi
-    return redirect(target_url)
+    target_url = request.args.get('url', '')
+    # SECURE: Validasi URL terhadap whitelist ketat untuk mencegah Open Redirect (CWE-601 Fixed)
+    safe_url = ALLOWED_REDIRECT_MAP.get(target_url, DEFAULT_REDIRECT)
+    return redirect(safe_url)
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    debug_mode = os.environ.get('FLASK_DEBUG', 'False').lower() in ('true', '1')
+    app.run(debug=debug_mode, port=5000)

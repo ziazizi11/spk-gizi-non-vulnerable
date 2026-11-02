@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pencarian Menu - SPK Gizi</title>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background: #f8fafc; color: #0f172a; padding: 40px 16px; margin: 0; }
+        .box { max-width: 700px; margin: 40px auto; background: #fff; padding: 36px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.05); border: 1px solid #e2e8f0; }
+        h2 { color: #059669; margin-top: 0; }
+        .query-box { background: #f1f5f9; padding: 14px 18px; border-radius: 10px; margin: 16px 0; border-left: 4px solid #059669; font-size: 1rem; }
+        .btn { display: inline-block; padding: 10px 20px; background: #059669; color: #fff; text-decoration: none; border-radius: 8px; font-weight: 600; }
+    </style>
+</head>
+<body>
+    <div class="box">
+        <h2>Hasil Pencarian Basis Data Gizi</h2>
+        <div class="query-box">Kata kunci pencarian: <strong>{{ keyword }}</strong></div>
+        <p style="color: #64748b;">Informasi kandungan nutrisi sesuai kriteria pencarian Anda telah diproses ke sistem SPK.</p>
+        <div style="margin-top: 24px; display: flex; gap: 10px;">
+            <a href="/" class="btn">Kembali ke Beranda</a>
+            <a href="/spk/saw" class="btn" style="background: #0284c7;">Lihat Ranking SAW</a>
+        </div>
+    </div>
+</body>
+</html>
+

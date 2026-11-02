@@ -57,7 +57,7 @@ jobs:
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
         run: |
           npx sonarqube-scanner \
-            -Dsonar.projectKey=spk-gizi-vulnerable \
+            -Dsonar.projectKey=spk-gizi-non-vulnerable \
             -Dsonar.sources=. \
             -Dsonar.exclusions=**/templates/**,**/scripts/** \
             -Dsonar.sarif.reportPaths=sonarqube-results.json || true
@@ -65,4 +65,4 @@ jobs:
       # --- EVALUASI OTOMATIS CONFUSION MATRIX ---
       - name: Run Evaluation Script
         run: |
-          python scripts/evaluate.py
+          python scripts/evaluate.py --mode 4

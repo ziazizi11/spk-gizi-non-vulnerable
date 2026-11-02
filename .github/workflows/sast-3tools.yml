@@ -36,4 +36,4 @@ jobs:
       # --- EVALUASI OTOMATIS CONFUSION MATRIX ---
       - name: Run Evaluation Script
         run: |
-          python scripts/evaluate.py
+          python scripts/evaluate.py --mode 3
